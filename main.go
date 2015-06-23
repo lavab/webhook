@@ -92,7 +92,67 @@ func main() {
 		return nil
 	}), 10)
 
-	if err := incoming.ConnectToNSQLookupd(*lookupdAddress); err != nil {
+	onboarding, err := nsq.NewConsumer("hook_onboarding", "handler", nsq.NewConfig())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	onboarding.SetLogger(&silentLogger{}, nsq.LogLevelDebug)
+
+	onboarding.AddConcurrentHandlers(nsq.HandlerFunc(func(msg *nsq.Message) error {
+		var event *events.Onboarding
+		if err := json.Unmarshal(msg.Body, &event); err != nil {
+			log.Print(err)
+			return err
+		}
+
+		cursor, err := r.Table("webhooks").GetAllByIndex("targetType", []interface{}{
+			event.Account,
+			"onboarding",
+		}).Run(session)
+		if err != nil {
+			log.Print(err)
+			return err
+		}
+		defer cursor.Close()
+		var hooks []*models.Webhook
+		if err := cursor.All(&hooks); err != nil {
+			log.Print(err)
+			return err
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(len(hooks))
+
+		for _, hook := range hooks {
+			go func() {
+				defer func() {
+					wg.Done()
+					msg.Touch()
+				}()
+
+				resp, err := http.Post(hook.Address, "application/json", bytes.NewReader(msg.Body))
+				if err != nil {
+					log.Print(err)
+					return
+				}
+
+				body, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					log.Print(err)
+					return
+				}
+
+				log.Printf("Onboarding hook to %s - %d: %s", hook.Address, resp.StatusCode, string(body))
+			}()
+		}
+
+		wg.Wait()
+
+		return nil
+	}), 10)
+
+	if err := onboarding.ConnectToNSQLookupd(*lookupdAddress); err != nil {
 		log.Fatal(err)
 	}
 
