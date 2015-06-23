@@ -106,10 +106,7 @@ func main() {
 			return err
 		}
 
-		cursor, err := r.Table("webhooks").GetAllByIndex("targetType", []interface{}{
-			event.Account,
-			"onboarding",
-		}).Run(session)
+		cursor, err := r.Table("webhooks").GetAllByIndex("type", "onboarding").Run(session)
 		if err != nil {
 			log.Print(err)
 			return err
